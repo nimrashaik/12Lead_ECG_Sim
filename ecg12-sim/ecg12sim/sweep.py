@@ -207,15 +207,15 @@ def run_ap_sweep(which: str = "I_Na", scales=SWEEP_SCALES,
                        I_Kr=rec["I_Kr"].T.copy(), metrics=mets)
 
 
-def run_complete_ap(cell_type: str = "epi", duration: float = 500.0,
-                    dt: float = 0.02, prepace: float = _PREPACE_MS,
-                    cond: im.Conductances | None = None):
+def run_complete_ap(cell_type: str = "epi", duration: float = 1000.0,
+                    dt: float = 0.02, prepace: float = _PREPACE_MS, cond : im.Conductances | None = None,
+                    drug:im.Drug | None = None):
     """Baseline action potential with every current the model carries.
 
     Returns ``(t, Vm, {current_name: trace}, APMetrics)``.
     """
     cond = cond or im.Conductances()
-    drug = im.Drug()
+    drug = drug or im.Drug()
     V, rec = _run_ensemble(drug, cond, 1, cell_type, duration, dt, prepace,
                            ALL_CURRENTS)
     t = np.arange(V.shape[0]) * dt

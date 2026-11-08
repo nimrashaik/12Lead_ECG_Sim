@@ -100,16 +100,16 @@ def _plot_12lead_grid(t, leads, title, qrs_window, t_window,
                 t_t = _lead_peak_time(sig, t, t_window)
                 ina_r, ikr_r = _currents_at(t, ina_peak, ikr_peak, t_r)
                 ina_t, ikr_t = _currents_at(t, ina_peak, ikr_peak, t_t)
-                txt = (f"R {t_r:5.1f} ms   $I_{{Na}}$ {ina_r:7.1f}   "
+                txt =  (f"R {t_r:5.1f} ms   $I_{{Na}}$ {ina_r:7.1f}   "
                        f"$I_{{Kr}}$ {ikr_r:6.3f}\n"
                        f"T {t_t:5.1f} ms   $I_{{Na}}$ {ina_t:7.1f}   "
                        f"$I_{{Kr}}$ {ikr_t:6.3f}")
-                ax.text(0.5, 0.025, txt, transform=ax.transAxes,
+                ax.text(0.5, 0.035, txt, transform=ax.transAxes,
                         fontsize=7.0, family="monospace", ha="center",
                         va="bottom", color="#1a1a1a", linespacing=1.5,
-                        bbox=dict(boxstyle="round,pad=0.30", facecolor="white",
+                        bbox=dict(boxstyle="round,pad=0.35", facecolor="white",
                                   edgecolor="#bbbbbb", linewidth=0.6,
-                                  alpha=0.93))
+                                  alpha=0.96))
 
             if c == 0:
                 ax.set_ylabel("mV")
@@ -173,6 +173,93 @@ def plot_12lead(ecg: EcgResult, title: str, path: str | None = None,
         caption=_CABLE_CAPTION, path=path)
 
 
+# def plot_12lead_comparison(base: EcgResult, drug: EcgResult,
+#                            ina_block: float = 0.0,
+#                            ikr_block: float = 0.0,
+#                            path: str | None = None):
+#     """Full 12-lead ECG overlay: normal vs channel-blocked beat."""
+
+#     t = base.cable.t
+#     td = drug.cable.t
+
+#     vmax = max(
+#         max(np.max(np.abs(base.leads[name])) for name in LEAD_NAMES),
+#         max(np.max(np.abs(drug.leads[name])) for name in LEAD_NAMES)
+#     )
+#     limit = max(vmax * 1.15, 0.5)
+
+#     fig, axes = plt.subplots(
+#         3, 4, figsize=(15, 8.6), sharex=True, sharey=True
+#     )
+
+#     for r in range(3):
+#         for c in range(4):
+#             name = _GRID[r][c]
+#             ax = axes[r, c]
+
+#             _ecg_background(ax, t[-1], -limit, limit)
+
+#             # Normal ECG
+#             ax.plot(
+#                 t, base.leads[name],
+#                 color="#111111", lw=1.3,
+#                 label="Normal"
+#             )
+
+#             # Drug-blocked ECG
+#             ax.plot(
+#                 td, drug.leads[name],
+#                 color="#d62728", lw=1.3, ls="--",
+#                 label="Reduced channel"
+#             )
+
+#             ax.set_xlim(0, t[-1])
+#             ax.set_ylim(-limit, limit)
+
+#             ax.text(
+#                 0.02, 0.88, name,
+#                 transform=ax.transAxes,
+#                 fontsize=11, fontweight="bold"
+#             )
+
+#             if c == 0:
+#                 ax.set_ylabel("mV")
+
+#             if r == 2:
+#                 ax.set_xlabel("time (ms)")
+
+#     handles, labels = axes[0, 0].get_legend_handles_labels()
+
+#     fig.legend(
+#         handles, labels,
+#         loc="upper center",
+#         bbox_to_anchor=(0.5, 0.955),
+#         ncol=2,
+#         frameon=False,
+#         fontsize=10
+#     )
+
+#     fig.suptitle(
+#         f"12-lead ECG: Normal vs Channel Block "
+#         f"(I_Na block {ina_block:.0f}%, "
+#         f"I_Kr block {ikr_block:.0f}%)\n"
+#         f"Normal QT: {base.qt:.1f} ms | "
+#         f"Blocked QT: {drug.qt:.1f} ms",
+#         fontsize=14,
+#         fontweight="bold",
+#         y=1.01
+#     )
+
+#     fig.tight_layout(rect=(0, 0, 1, 0.91))
+
+#     if path:
+#         fig.savefig(path, dpi=200, facecolor="white",
+#                     bbox_inches="tight")
+#         plt.close(fig)
+
+#     return fig
+
+
 def plot_12lead_mesh(beat, leads: dict, title: str, path: str | None = None,
                      annotate_currents: bool = True):
     """3x4 clinical 12-lead layout for the anatomical mesh model.
@@ -189,72 +276,199 @@ def plot_12lead_mesh(beat, leads: dict, title: str, path: str | None = None,
         caption=_MESH_CAPTION, path=path)
 
 
-def plot_ion_currents(base: CellTrace, drug: CellTrace,
-                      ina_block: float, ikr_block: float,
-                      path: str | None = None):
-    """Action potential + I_Na and I_Kr traces, baseline vs blocked."""
-    fig, axes = plt.subplots(3, 1, figsize=(9, 9), sharex=True)
-    tt = base.t
+# def plot_ion_currents(base: CellTrace, drug: CellTrace,
+#                       ina_block: float, ikr_block: float,
+#                       path: str | None = None):
+#     """Action potential + I_Na and I_Kr traces, baseline vs blocked."""
+#     fig, axes = plt.subplots(3, 1, figsize=(9, 9), sharex=True)
+#     tt = base.t
 
-    axes[0].plot(tt, base.V, color="#1f77b4", lw=1.6, label="baseline")
-    axes[0].plot(drug.t, drug.V, color="#d62728", lw=1.6, ls="--",
-                 label=f"drug (APD90 {drug.apd90:.0f} ms)")
-    axes[0].set_ylabel("Vm (mV)")
-    axes[0].set_title(f"Action potential — {base.cell_type} cell "
-                      f"(baseline APD90 {base.apd90:.0f} ms)")
-    axes[0].legend(loc="upper right")
+#     axes[0].plot(tt, base.V, color="#1f77b4", lw=1.6, label="baseline")
+#     axes[0].plot(drug.t, drug.V, color="#d62728", lw=1.6, ls="--",
+#                  label=f"drug (APD90 {drug.apd90:.0f} ms)")
+#     axes[0].set_ylabel("Vm (mV)")
+#     axes[0].set_title(f"Action potential — {base.cell_type} cell "
+#                       f"(baseline APD90 {base.apd90:.0f} ms)")
+#     axes[0].legend(loc="upper right")
 
-    axes[1].plot(tt, base.I_Na, color="#1f77b4", lw=1.4, label="baseline")
-    axes[1].plot(drug.t, drug.I_Na, color="#d62728", lw=1.4, ls="--",
-                 label=f"I_Na block {ina_block:.0f}%")
-    axes[1].set_ylabel("I_Na (pA/pF)")
-    axes[1].set_title("Fast sodium current I_Na (phase-0 upstroke)")
-    axes[1].legend(loc="lower right")
+#     axes[1].plot(tt, base.I_Na, color="#1f77b4", lw=1.4, label="baseline")
+#     axes[1].plot(drug.t, drug.I_Na, color="#d62728", lw=1.4, ls="--",
+#                  label=f"I_Na block {ina_block:.0f}%")
+#     axes[1].set_ylabel("I_Na (pA/pF)")
+#     axes[1].set_title("Fast sodium current I_Na (phase-0 upstroke)")
+#     axes[1].legend(loc="lower right")
 
-    axes[2].plot(tt, base.I_Kr, color="#1f77b4", lw=1.4, label="baseline")
-    axes[2].plot(drug.t, drug.I_Kr, color="#d62728", lw=1.4, ls="--",
-                 label=f"I_Kr block {ikr_block:.0f}%")
-    axes[2].set_ylabel("I_Kr (pA/pF)")
-    axes[2].set_title("Rapid delayed-rectifier K+ current I_Kr (repolarisation)")
-    axes[2].set_xlabel("time (ms)")
-    axes[2].legend(loc="upper right")
+#     axes[2].plot(tt, base.I_Kr, color="#1f77b4", lw=1.4, label="baseline")
+#     axes[2].plot(drug.t, drug.I_Kr, color="#d62728", lw=1.4, ls="--",
+#                  label=f"I_Kr block {ikr_block:.0f}%")
+#     axes[2].set_ylabel("I_Kr (pA/pF)")
+#     axes[2].set_title("Rapid delayed-rectifier K+ current I_Kr (repolarisation)")
+#     axes[2].set_xlabel("time (ms)")
+#     axes[2].legend(loc="upper right")
 
-    for ax in axes:
-        ax.grid(color="#dddddd", lw=0.5)
-        ax.set_axisbelow(True)
-    fig.tight_layout()
-    if path:
-        fig.savefig(path, dpi=130)
-        plt.close(fig)
-    return fig
+#     for ax in axes:
+#         ax.grid(color="#dddddd", lw=0.5)
+#         ax.set_axisbelow(True)
+#     fig.tight_layout()
+#     if path:
+#         fig.savefig(path, dpi=130)
+#         plt.close(fig)
+#     return fig
 
 
-def plot_ecg_comparison(base: EcgResult, drug: EcgResult,
-                        leads_to_show=("II", "V2", "V5"),
+# def plot_ecg_comparison(base: EcgResult, drug: EcgResult,
+#                         leads_to_show=("II", "V2", "V5"),
+#                         path: str | None = None):
+#     """Overlay baseline vs drug for a few leads to highlight QT / QRS changes."""
+#     t = base.cable.t
+#     fig, axes = plt.subplots(len(leads_to_show), 1,
+#                              figsize=(10, 2.4 * len(leads_to_show)), sharex=True)
+#     if len(leads_to_show) == 1:
+#         axes = [axes]
+#     for ax, name in zip(axes, leads_to_show):
+#         ax.plot(t, base.leads[name], color="#1f77b4", lw=1.3, label="baseline")
+#         ax.plot(drug.cable.t, drug.leads[name], color="#d62728", lw=1.3, ls="--",
+#                 label="drug")
+#         ax.set_ylabel(f"{name} (mV)")
+#         ax.grid(color="#dddddd", lw=0.5)
+#         ax.set_axisbelow(True)
+#         ax.legend(loc="upper right", fontsize=8)
+#     axes[-1].set_xlabel("time (ms)")
+#     fig.suptitle(f"Baseline QT {base.qt:.0f} ms  vs  drug QT {drug.qt:.0f} ms",
+#                  fontsize=13, fontweight="bold")
+#     fig.tight_layout(rect=(0, 0, 1, 0.96))
+#     if path:
+#         fig.savefig(path, dpi=130)
+#         plt.close(fig)
+#     return fig
+
+def plot_12lead_overlay(base: EcgResult, drug: EcgResult, title: str,
+                        ina_block: float = 0.0, ikr_block: float = 0.0,
                         path: str | None = None):
-    """Overlay baseline vs drug for a few leads to highlight QT / QRS changes."""
-    t = base.cable.t
-    fig, axes = plt.subplots(len(leads_to_show), 1,
-                             figsize=(10, 2.4 * len(leads_to_show)), sharex=True)
-    if len(leads_to_show) == 1:
-        axes = [axes]
-    for ax, name in zip(axes, leads_to_show):
-        ax.plot(t, base.leads[name], color="#1f77b4", lw=1.3, label="baseline")
-        ax.plot(drug.cable.t, drug.leads[name], color="#d62728", lw=1.3, ls="--",
-                label="drug")
-        ax.set_ylabel(f"{name} (mV)")
-        ax.grid(color="#dddddd", lw=0.5)
-        ax.set_axisbelow(True)
-        ax.legend(loc="upper right", fontsize=8)
-    axes[-1].set_xlabel("time (ms)")
-    fig.suptitle(f"Baseline QT {base.qt:.0f} ms  vs  drug QT {drug.qt:.0f} ms",
-                 fontsize=13, fontweight="bold")
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
-    if path:
-        fig.savefig(path, dpi=130)
-        plt.close(fig)
-    return fig
+    """Full 3x4 12-lead overlay with per-condition R/T and current readouts."""
+    from .tracking import ecg_windows
 
+    b, d = base.cable, drug.cable
+    fig, axes = plt.subplots(3, 4, figsize=(16, 10),
+                             sharex=True, sharey=True)
+
+    for r in range(3):
+        for c in range(4):
+            name = _GRID[r][c]
+            ax = axes[r, c]
+            sig_b, sig_d = base.leads[name], drug.leads[name]
+
+            vmax = max(float(np.max(np.abs(sig_b))),
+                       float(np.max(np.abs(sig_d))), 0.1)
+            ymin, ymax = -1.75 * vmax, 1.15 * vmax
+            _ecg_background(ax, b.t[-1], ymin, ymax)
+
+            ax.plot(b.t, sig_b, color="#111111", lw=1.15,
+                    label="Normal")
+            ax.plot(d.t, sig_d, color="#d62728", lw=1.15,
+                    ls="--", label="Blocked")
+
+            ax.set_xlim(0, b.t[-1])
+            ax.set_ylim(ymin, ymax)
+            ax.text(0.02, 0.91, name, transform=ax.transAxes,
+                    fontsize=10, fontweight="bold")
+
+            qb, tb = ecg_windows(b)
+            qd, td = ecg_windows(d)
+
+            trb = _lead_peak_time(sig_b, b.t, qb)
+            ttb = _lead_peak_time(sig_b, b.t, tb)
+            trd = _lead_peak_time(sig_d, d.t, qd)
+            ttd = _lead_peak_time(sig_d, d.t, td)
+
+            inab_r, ikrb_r = _currents_at(
+                b.t, b.I_Na.min(axis=1), b.I_Kr.max(axis=1), trb)
+            inab_t, ikrb_t = _currents_at(
+                b.t, b.I_Na.min(axis=1), b.I_Kr.max(axis=1), ttb)
+            inad_r, ikrd_r = _currents_at(
+                d.t, d.I_Na.min(axis=1), d.I_Kr.max(axis=1), trd)
+            inad_t, ikrd_t = _currents_at(
+                d.t, d.I_Na.min(axis=1), d.I_Kr.max(axis=1), ttd)
+
+            txt_base = (
+            f"R {trb:5.1f} ms  $I_{{Na}}$ {inab_r:7.1f}  "
+            f"$I_{{Kr}}$ {ikrb_r:6.3f}\n"
+            f"T {ttb:5.1f} ms  $I_{{Na}}$ {inab_t:7.1f}  "
+            f"$I_{{Kr}}$ {ikrb_t:6.3f}"
+            )
+
+            txt_drug = (
+            f"R {trd:5.1f} ms  $I_{{Na}}$ {inad_r:7.1f}  "
+            f"$I_{{Kr}}$ {ikrd_r:6.3f}\n"
+            f"T {ttd:5.1f} ms  $I_{{Na}}$ {inad_t:7.1f}  "
+            f"$I_{{Kr}}$ {ikrd_t:6.3f}"
+            )
+
+            ax.text(
+            0.02, 0.035, txt_base,
+            transform=ax.transAxes,
+            fontsize=5.8,
+            family="monospace",
+            ha="left",
+            va="bottom",
+            color="black",
+            bbox=dict(
+            boxstyle="round,pad=0.25",
+            facecolor="white",
+            edgecolor="black",
+            linewidth=0.5,
+            alpha=0.94
+            )
+            )
+
+            ax.text(
+            0.98, 0.035, txt_drug,
+            transform=ax.transAxes,
+            fontsize=5.8,
+            family="monospace",
+            ha="right",
+            va="bottom",
+            color="red",
+            bbox=dict(
+            boxstyle="round,pad=0.25",
+            facecolor="white",
+            edgecolor="red",
+            linewidth=0.5,
+            alpha=0.94
+            )
+            )
+
+
+            if c == 0:
+                ax.set_ylabel("mV")
+            if r == 2:
+                ax.set_xlabel("time (ms)")
+
+    handles = [
+        Line2D([0], [0], color="#111", lw=1.5, label="Normal"),
+        Line2D([0], [0], color="#d62728", lw=1.5,
+               ls="--", label="Channel block")
+    ]
+    fig.legend(handles=handles, loc="upper center",bbox_to_anchor = (0.5, 0.955),
+               ncol=2, frameon=False, fontsize = 10)
+
+    fig.suptitle(
+        f"{title}\n" 
+        f"I_Na block {ina_block:.0f}% | "
+        f"I_Kr block {ikr_block:.0f}%\n"
+        f"QT: {base.qt:.1f} ms (normal) vs "
+        f"{drug.qt:.1f} ms (blocked)",
+        fontsize=13, fontweight="bold", y=.995
+    )
+
+    fig.tight_layout(rect=(0, 0, 1, .89))
+
+    if path:
+        fig.savefig(path, dpi=170, facecolor="white",
+                    bbox_inches="tight")
+        plt.close(fig)
+
+    return fig
 
 # ---------------------------------------------------------------------------
 # Tracking views: observe I_Na and I_Kr across the wall during a normal beat
@@ -707,7 +921,91 @@ def plot_complete_ap(t, V, traces, met, cell_type: str,
         plt.close(fig)
     return fig
 
+def plot_complete_ap_comparison(
+    t_base, v_base, tr_base, met_base,
+    t_drug, v_drug, tr_drug, met_drug,
+    cell_type: str, label: str = "drug condition",
+    path: str | None = None
+):
+    """Overlay normal and drug APs plus all nine ionic-current traces."""
+    fig, axes = plt.subplots(
+        5, 1, figsize=(12, 13), sharex=True,
+        gridspec_kw={"height_ratios": [1.5, 1.1, 1, 1, 1]}
+    )
 
+    normal_color = "#111111"
+    drug_color = "#d62728"
+
+    # Panel A: membrane voltage
+    ax = axes[0]
+    ax.plot(t_base, v_base, color=normal_color, lw=1.8,
+            label="Normal")
+    ax.plot(t_drug, v_drug, color=drug_color, lw=1.6,
+            ls="--", label=label)
+    ax.set_ylabel("Vm (mV)")
+    ax.set_title(
+        f"A. Membrane voltage — {cell_type} ventricular myocyte",
+        loc="left"
+    )
+    ax.legend(loc="best", fontsize=8)
+    ax.text(
+        .99, .96,
+        f"APD90: {met_base.apd90:.1f} ms → "
+        f"{met_drug.apd90:.1f} ms",
+        transform=ax.transAxes, ha="right", va="top",
+        fontsize=9,
+        bbox=dict(fc="white", ec="#bbb", alpha=.9)
+    )
+
+    # Panel B: fast sodium current
+    ax = axes[1]
+    for traces, times, color, style, name in (
+        (tr_base, t_base, normal_color, "-", "Normal"),
+        (tr_drug, t_drug, drug_color, "--", label)
+    ):
+        ax.plot(times, traces["I_Na"], color=color,
+                ls=style, lw=1.4, label=name)
+
+    ax.set_ylabel("I_Na\n(pA/pF)")
+    ax.set_title("B. Fast sodium current", loc="left")
+    ax.legend(fontsize=8)
+
+    # Panels C-E: all remaining ionic currents
+    for ax, (heading, members) in zip(axes[2:], _CURRENT_GROUPS):
+        for name, color in members:
+            ax.plot(
+                t_base, tr_base[name], color=color,
+                lw=1.5, label=f"{name} normal"
+            )
+            ax.plot(
+                t_drug, tr_drug[name], color=color,
+                lw=1.3, ls="--", label=f"{name} blocked"
+            )
+
+        ax.set_ylabel("pA/pF")
+        ax.set_title(heading, loc="left")
+        ax.legend(fontsize=7, ncol=3)
+
+    axes[-1].set_xlabel("time (ms)")
+
+    for ax in axes:
+        ax.grid(color="#e8e8e8", lw=.5)
+        ax.set_axisbelow(True)
+        ax.set_xlim(t_base[0], t_base[-1])
+
+    fig.suptitle(
+        "Complete myocardial action potential: "
+        "normal vs drug condition",
+        fontsize=14, fontweight="bold"
+    )
+    fig.tight_layout(rect=(0, 0, 1, .975))
+
+    if path:
+        fig.savefig(path, dpi=160, facecolor="white",
+                    bbox_inches="tight")
+        plt.close(fig)
+
+    return fig
 def _sweep_colors(scales):
     """Diverging colours about baseline: blue below 1.0, red above."""
     cmap = plt.get_cmap("coolwarm")

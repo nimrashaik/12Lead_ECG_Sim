@@ -384,9 +384,80 @@ def main(argv=None):
               f"{drug_rep.conduction_velocity:.1f} cm/s")
         if not args.no_save:
             tag = f"ina{int(args.ina_block)}_ikr{int(args.ikr_block)}"
-            p = os.path.join(args.outdir, f"compare_{tag}.png")
-            plotting.plot_ecg_comparison(ecg, drug_ecg, path=p)
-            outputs.append(p)
+            
+            # p = os.path.join(args.outdir, f"compare_{tag}.png")
+            # plotting.plot_ecg_comparison(ecg, drug_ecg, path=p)
+            # outputs.append(p)
+            
+            p12 = os.path.join(
+            args.outdir, f"ecg12_comparison_ina{int(args.ina_block)}_ikr{int(args.ikr_block)}.png"
+            )
+            plotting.plot_12lead_overlay(
+                ecg,
+                drug_ecg,
+                title="12-lead ECG: normal vs channel block",
+                ina_block=args.ina_block,
+                ikr_block=args.ikr_block,
+                path=p12
+                )
+            
+            outputs.append(p12)
+            
+            
+            from ecg12sim import sweep as sw
+            ap_base = sw.run_complete_ap(
+            cell_type=args.sweep_cell,
+            duration=args.duration
+                )
+
+            ap_drug = sw.run_complete_ap(
+            cell_type=args.sweep_cell,
+            duration=args.duration,
+            drug=drug
+            )
+
+            t_base, v_base, tr_base, met_base = ap_base
+            t_drug, v_drug, tr_drug, met_drug = ap_drug
+            
+            # pbase = os.path.join(args.outdir, "ap_complete_normal.png")
+            # plotting.plot_complete_ap(
+            # t_base, v_base, tr_base, met_base,
+            # args.sweep_cell,
+            # path=pbase
+            # )
+            # outputs.append(pbase)
+
+            # Save drug AP
+            # tag = f"ina{int(args.ina_block)}_ikr{int(args.ikr_block)}"
+            # pdrug = os.path.join(args.outdir, f"ap_complete_{tag}.png")
+
+            # plotting.plot_complete_ap(
+            # t_drug, v_drug, tr_drug, met_drug,
+            # args.sweep_cell,
+            # path=pdrug
+            # )
+            # outputs.append(pdrug)
+            # Save overlay comparison
+            pac = os.path.join(
+            args.outdir,
+            f"ap_complete_comparison_{tag}.png"
+            )
+
+            plotting.plot_complete_ap_comparison(
+            t_base, v_base, tr_base, met_base,
+            t_drug, v_drug, tr_drug, met_drug,
+            args.sweep_cell,
+            label=(
+            f"I_Na block {args.ina_block:.0f}%, "
+            f"I_Kr block {args.ikr_block:.0f}%"
+            ),
+            path=pac
+            )
+            outputs.append(pac)
+           
+            
+
+
 
     if outputs:
         print("\nSaved figures:")
