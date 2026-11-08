@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Anatomical mesh data, fetched on demand rather than committed.
+# Source: Rodero et al., CC-BY-4.0, https://doi.org/10.5281/zenodo.4590293
+data/meshes/
