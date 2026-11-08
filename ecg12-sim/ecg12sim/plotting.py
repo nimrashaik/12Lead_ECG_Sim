@@ -449,7 +449,7 @@ def plot_12lead_overlay(base: EcgResult, drug: EcgResult, title: str,
         Line2D([0], [0], color="#d62728", lw=1.5,
                ls="--", label="Channel block")
     ]
-    fig.legend(handles=handles, loc="upper center",bbox_to_anchor = (0.5, 0.955),
+    fig.legend(handles=handles, loc="upper center",bbox_to_anchor = (0.5, 0.88),
                ncol=2, frameon=False, fontsize = 10)
 
     fig.suptitle(

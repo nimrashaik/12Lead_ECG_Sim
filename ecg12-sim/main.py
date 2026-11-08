@@ -373,6 +373,15 @@ def main(argv=None):
               f"(I_Na {args.ina_block:.0f}%, I_Kr {args.ikr_block:.0f}%)...")
         drug = im.Drug.from_block_percent(args.ina_block, args.ikr_block)
         drug_ecg = run_12lead(drug, cfg=cfg, gain=ecg.gain)
+        import numpy as np
+
+        for lead, signal in drug_ecg.leads.items():
+            print(
+            lead,
+            "min:", np.nanmin(signal),
+            "max:", np.nanmax(signal),
+            "NaNs:", np.isnan(signal).sum()
+            )
         drug_rep = tracking.analyse(drug_ecg.cable)
         print(f"  QT        : {ecg.qt:.0f} ms -> {drug_ecg.qt:.0f} ms "
               f"({drug_ecg.qt - ecg.qt:+.0f} ms)")
