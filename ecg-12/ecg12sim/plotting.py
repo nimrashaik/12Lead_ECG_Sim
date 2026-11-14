@@ -1162,8 +1162,78 @@ def _rhythm_background(ax, t0, t1, ymin, ymax):
     ax.tick_params(labelsize=7)
 
 
+def _annotate_wave(ax, t_s, sig, t_event_s, label, color, ymin, ymax,
+                   above=True):
+    """Place a plain text label at a fixed height near the top of the axes."""
+    if not np.isfinite(t_event_s):
+        return
+    m = np.abs(t_s - t_event_s) <= 0.005
+    if not m.any():
+        return
+    # Always place the label near the top of the axes but below the lead name.
+    y_text = ymax - (ymax - ymin) * 0.22
+    ax.text(t_event_s, y_text, label,
+            fontsize=8, color=color, fontweight="bold",
+            ha="center", va="top", zorder=5,
+            bbox=dict(boxstyle="square,pad=0.15", facecolor="white",
+                      edgecolor="none", alpha=0.85))
+
+
+def _annotate_rhythm_beat(ax, t_s, sig, beat, ymin, ymax, ina_peak=None,
+                          ikr_peak=None, beat_t_ms=None):
+    """Label P, R, S, T on one beat and show I_Na / I_Kr in the panel corner."""
+    dt_s = float(t_s[1] - t_s[0])
+    x_lo, x_hi = float(t_s[0]), float(t_s[-1])
+
+    # P
+    _annotate_wave(ax, t_s, sig, beat.p_peak_time / 1000.0,
+                   "P", "#1f77b4", ymin, ymax)
+    # R
+    r_s = beat.r_time / 1000.0
+    _annotate_wave(ax, t_s, sig, r_s, "R", "#2b2b2b", ymin, ymax)
+
+    # S — first negative minimum within 80 ms after R
+    r_idx = int(np.argmin(np.abs(t_s - r_s)))
+    search_end = min(r_idx + int(round(0.08 / dt_s)), len(sig) - 1)
+    t_idx = None
+    if search_end > r_idx:
+        s_idx = r_idx + int(np.argmin(sig[r_idx:search_end + 1]))
+        if sig[s_idx] < -0.01:
+            _annotate_wave(ax, t_s, sig, float(t_s[s_idx]),
+                           "S", "#555555", ymin, ymax)
+
+    # T — largest positive peak 80–450 ms after QRS onset
+    qrs_off_s = beat.qrs_onset / 1000.0 + 0.08
+    t_lo = int(np.argmin(np.abs(t_s - qrs_off_s)))
+    t_hi = min(int(np.argmin(np.abs(t_s - (r_s + 0.45)))), len(sig) - 1)
+    if t_hi > t_lo:
+        t_idx = t_lo + int(np.argmax(sig[t_lo:t_hi + 1]))
+        if sig[t_idx] > 0.01:
+            _annotate_wave(ax, t_s, sig, float(t_s[t_idx]),
+                           "T", "#d62728", ymin, ymax)
+        else:
+            t_idx = None
+
+    # I_Na / I_Kr — single line of text in the bottom-left corner
+    if ina_peak is not None and ikr_peak is not None and beat_t_ms is not None:
+        beat_len_ms = float(beat_t_ms[-1])
+        ina_r, _ = _currents_at(beat_t_ms, ina_peak, ikr_peak,
+                                beat.r_time % beat_len_ms)
+        ikr_t = float("nan")
+        if t_idx is not None:
+            _, ikr_t = _currents_at(beat_t_ms, ina_peak, ikr_peak,
+                                    (float(t_s[t_idx]) * 1000.0) % beat_len_ms)
+        ax.text(0.02, 0.04,
+                f"INa={ina_r:.0f},  IKr={ikr_t:.3f} pA/pF",
+                transform=ax.transAxes,
+                fontsize=7, color="black", ha="left", va="bottom",
+                bbox=dict(boxstyle="square,pad=0.3", facecolor="white",
+                          edgecolor="black", linewidth=0.8))
+
+
 def plot_rhythm_12lead(result, title: str, path: str | None = None,
-                       rhythm_lead: str = "II", columns: int = 4):
+                       rhythm_lead: str = "II", columns: int = 4,
+                       vbeat=None):
     """The standard clinical 10-second 12-lead layout.
 
     This is the format a real machine prints, and it is deliberately not the
@@ -1176,7 +1246,13 @@ def plot_rhythm_12lead(result, title: str, path: str | None = None,
 
     Amplitudes are shared across every panel so the leads stay comparable, which
     is also the convention on a printed ECG.
+
+    Pass ``vbeat`` (a :class:`ecg12sim.mesh_sim.MeshBeat`) to overlay P, R, S
+    and T wave labels and I_Na / I_Kr current values on the first beat visible
+    in each panel.
     """
+    from .rhythm import measure_beats
+
     t_s = result.t / 1000.0
     total = float(t_s[-1])
     seg = total / columns
@@ -1188,12 +1264,21 @@ def plot_rhythm_12lead(result, title: str, path: str | None = None,
     grid = [[flat[c * rows + r] for c in range(columns)] for r in range(rows)]
 
     vmax = max(float(np.max(np.abs(s))) for s in result.leads.values())
-    ymax, ymin = vmax * 1.18, -vmax * 1.18
+    # Modest extra headroom for the wave labels above and I_Na/I_Kr text below.
+    ymax, ymin = vmax * 1.70, -vmax * 1.50
+
+    # Pre-compute beat measurements and current arrays once.
+    all_beats = measure_beats(result.t, result.leads)
+    ina_peak = ikr_peak = beat_t_ms = None
+    if vbeat is not None:
+        ina_peak = vbeat.ina.peak
+        ikr_peak = vbeat.ikr.peak
+        beat_t_ms = vbeat.t
 
     fig, axes = plt.subplots(rows + 1, columns,
-                             figsize=(16.5, 2.05 * (rows + 1)),
+                             figsize=(16.5, 2.6 * (rows + 1)),
                              gridspec_kw={"height_ratios":
-                                          [1.0] * rows + [1.15]})
+                                          [1.0] * rows + [1.2]})
     for r in range(rows):
         for c in range(columns):
             name = grid[r][c]
@@ -1201,7 +1286,8 @@ def plot_rhythm_12lead(result, title: str, path: str | None = None,
             lo, hi = c * seg, (c + 1) * seg
             m = (t_s >= lo) & (t_s <= hi)
             _rhythm_background(ax, lo, hi, ymin, ymax)
-            ax.plot(t_s[m], result.leads[name][m], color="#111", lw=1.0)
+            sig_full = result.leads[name]
+            ax.plot(t_s[m], sig_full[m], color="#111", lw=1.0)
             ax.set_xlim(lo, hi)
             ax.set_ylim(ymin, ymax)
             ax.text(0.015, 0.84, name, transform=ax.transAxes,
@@ -1211,19 +1297,38 @@ def plot_rhythm_12lead(result, title: str, path: str | None = None,
             else:
                 ax.tick_params(labelleft=False)
 
+            # Annotate the first beat whose R peak falls in this panel's window.
+            panel_beats = [b for b in all_beats
+                           if lo <= b.r_time / 1000.0 <= hi and b.has_p]
+            if panel_beats:
+                b = panel_beats[0]
+                _annotate_rhythm_beat(
+                    ax, t_s[m], sig_full[m], b, ymin, ymax,
+                    ina_peak=ina_peak, ikr_peak=ikr_peak,
+                    beat_t_ms=beat_t_ms)
+
     # Full-length rhythm strip across the bottom row.
     gs = axes[rows, 0].get_gridspec()
     for ax in axes[rows, :]:
         ax.remove()
     axr = fig.add_subplot(gs[rows, :])
     _rhythm_background(axr, 0.0, total, ymin, ymax)
-    axr.plot(t_s, result.leads[rhythm_lead], color="#111", lw=0.9)
+    sig_rhythm = result.leads[rhythm_lead]
+    axr.plot(t_s, sig_rhythm, color="#111", lw=0.9)
     axr.set_xlim(0, total)
     axr.set_ylim(ymin, ymax)
     axr.text(0.004, 0.84, f"{rhythm_lead}  (rhythm, full {total:.0f} s)",
              transform=axr.transAxes, fontsize=10.5, fontweight="bold")
     axr.set_xlabel("time (s)", fontsize=10)
     axr.set_ylabel("mV", fontsize=9)
+
+    # Annotate every other beat on the rhythm strip to avoid crowding.
+    for b in all_beats[::2]:
+        if b.has_p:
+            _annotate_rhythm_beat(
+                axr, t_s, sig_rhythm, b, ymin, ymax,
+                ina_peak=ina_peak, ikr_peak=ikr_peak,
+                beat_t_ms=beat_t_ms)
 
     cfg = result.config
     fig.suptitle(f"{title}\n{cfg.heart_rate_bpm:.0f} bpm, "

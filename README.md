@@ -4,7 +4,8 @@ A 12-lead ECG simulator built from ionic-model myocardium on an image-derived
 four-chamber heart mesh. It produces P waves, QRS complexes and T waves, runs
 multi-beat rhythm strips at a prescribed heart rate, and tracks where and when
 the fast sodium current (I_Na) and the rapid delayed-rectifier potassium current
-(I_Kr) flow through the wall.
+(I_Kr) flow through the wall. The rhythm figure annotates each beat with P, R,
+S and T wave labels and reports the sampled I_Na and I_Kr values per panel.
 
 Dependencies are numpy, scipy and matplotlib. Nothing else.
 
@@ -12,12 +13,14 @@ Dependencies are numpy, scipy and matplotlib. Nothing else.
 python main.py --model mesh --rhythm        # 10-second 12-lead ECG at 72 bpm
 ```
 
-![10-second 12-lead ECG at 72 bpm](examples/rhythm_72bpm/ecg12_rhythm_72bpm.png)
+![10-second 12-lead ECG at 72 bpm](out/ecg12_rhythm_72bpm.png)
 
 Twelve beats, one every 833 ms, in the layout a clinical machine prints: each
 lead over its own 2.5-second quarter, with lead II running the full ten seconds
 along the bottom. The P waves are the small deflections before each QRS, clearest
-in II, III, aVF and V1-V3.
+in II, III, aVF and V1-V3. Each panel labels the first beat's P, R, S and T
+waves and shows the sampled I_Na (at R) and I_Kr (at T) currents in a box at
+the bottom-left.
 
 Those P waves are atrial in origin, which the detail figure shows by drawing each
 source separately against their sum. In the shaded bands the recorded trace lies
@@ -270,7 +273,7 @@ explanation rather than silently ignored.
 
 | file | what it shows |
 |---|---|
-| `ecg12_rhythm_<bpm>bpm.png` | standard clinical layout: twelve leads in four 2.5 s columns, plus one lead full-length as a rhythm strip |
+| `ecg12_rhythm_<bpm>bpm.png` | standard clinical layout: twelve leads in four 2.5 s columns, plus one lead full-length as a rhythm strip; each panel annotates the first beat with P, R, S, T wave labels and an I_Na / I_Kr current box |
 | `ecg_p_wave_detail.png` | two beats with the atrial and ventricular contributions drawn separately against their sum |
 | `atrial_activation.png` | atrial activation time in three anatomical planes, with the sinoatrial node marked |
 
@@ -575,7 +578,7 @@ where counting noise would have fallen as the square root.
 | `tracking.py` | 291 | I_Na / I_Kr analysis and transmural profiles |
 | `timeline.py` | 451 | instant-by-instant current readout |
 | `sweep.py` | 298 | single-cell conductance sweeps |
-| `plotting.py` | 1399 | all figures |
+| `plotting.py` | 1504 | all figures; rhythm layout annotates P, R, S, T waves and I_Na / I_Kr per panel |
 
 Bold modules are the atrial and rhythm work.
 
@@ -603,4 +606,5 @@ formulation. The extracellular potential integral follows Gima & Rudy (2002),
 and the boundary-element solid angles use the closed form of Van Oosterom &
 Strackee (1983).
 
-This is a research and teaching simulator. It is not a medical device and must not be used for clinical decisions.
+This is a research and teaching simulator. It is not a medical device and must
+not be used for clinical decisions.

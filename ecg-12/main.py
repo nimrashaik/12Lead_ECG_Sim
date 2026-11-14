@@ -402,7 +402,7 @@ def run_with_atria(args, mesh, beat, amesh, abeat, aact):
                  f"12-lead ECG - four-chamber mesh, bounded torso "
                  f"({mesh.n_nodes:,} ventricular + {amesh.n_nodes:,} atrial "
                  f"nodes)",
-                 path=p, rhythm_lead=args.rhythm_lead)),
+                 path=p, rhythm_lead=args.rhythm_lead, vbeat=beat)),
             ("ecg_p_wave_detail.png",
              lambda p: plotting.plot_p_wave_detail(res, path=p)),
             ("atrial_activation.png",
