@@ -586,7 +586,7 @@ the places to start for the P wave and the rhythm strip.
 
 ---
 
-## Data source and citation
+## References
 
 Meshes are from the virtual cohort of adult healthy four-chamber heart meshes
 derived from CT, licensed **CC-BY-4.0**:
@@ -603,5 +603,4 @@ formulation. The extracellular potential integral follows Gima & Rudy (2002),
 and the boundary-element solid angles use the closed form of Van Oosterom &
 Strackee (1983).
 
-This is a research and teaching simulator. It is not a medical device and must
-not be used for clinical decisions.
+This is a research and teaching simulator. It is not a medical device and must not be used for clinical decisions.
