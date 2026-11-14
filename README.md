@@ -1,4 +1,4 @@
-# ecg12sim
+# 12-Lead ECG Simulator
 
 A 12-lead ECG simulator built from ionic-model myocardium on an image-derived
 four-chamber heart mesh. It produces P waves, QRS complexes and T waves, runs
