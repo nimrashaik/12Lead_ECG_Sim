@@ -74,6 +74,17 @@ def parse_args(argv=None):
                          "cm/s; 0 disables. Lower values leave activation "
                          "apex-to-base dominated and invert the frontal-plane "
                          "leads.")
+    mg.add_argument("--no-atria", action="store_true",
+                    help="Ventricles only: skip the atrial mesh, so the ECG "
+                         "has no P wave. The default includes the atria.")
+    mg.add_argument("--atrial-cv", type=float, default=None,
+                    help="Atrial conduction velocity, cm/s (isotropic). "
+                         "Default is the library's calibrated value; pass "
+                         "--calibrate-atrial-cv to recompute it for this mesh.")
+    mg.add_argument("--calibrate-atrial-cv", action="store_true",
+                    help="Choose the atrial conduction velocity so total "
+                         "atrial activation matches the target P-wave "
+                         "duration on this particular mesh.")
     mg.add_argument("--unbounded", action="store_true",
                     help="Use the unbounded-medium forward model instead of "
                          "the bounded torso. Limb leads come out ~25x too "
@@ -84,6 +95,23 @@ def parse_args(argv=None):
     mg.add_argument("--calibrate-metrication", action="store_true",
                     help="Measure and correct the graph's path-length bias "
                          "so realised conduction velocity matches --cv-fibre.")
+    rh = p.add_argument_group(
+        "multi-beat rhythm strip (--model mesh)")
+    rh.add_argument("--rhythm", action="store_true",
+                    help="Produce a continuous multi-beat 12-lead strip at a "
+                         "prescribed heart rate, instead of a single beat. "
+                         "Needs the atria to show P waves.")
+    rh.add_argument("--heart-rate", type=float, default=72.0,
+                    help="Heart rate for the rhythm strip, bpm. Default 72.")
+    rh.add_argument("--rhythm-duration", type=float, default=10.0,
+                    help="Length of the rhythm strip in seconds. Default 10.")
+    rh.add_argument("--pr-interval", type=float, default=160.0,
+                    help="Atrioventricular delay in ms: atrial activation "
+                         "onset to ventricular activation onset. Default 160.")
+    rh.add_argument("--rhythm-lead", default="II",
+                    help="Lead shown as the full-length rhythm strip along the "
+                         "bottom of the figure. Default II.")
+
     p.add_argument("--outdir", default="examples",
                    help="Directory for the PNG figures. Default ./examples.")
     p.add_argument("--no-save", action="store_true",
@@ -129,7 +157,13 @@ def parse_args(argv=None):
 
 
 def run_mesh_model(args):
-    """Run the beat on an anatomically accurate biventricular mesh."""
+    """Run the beat on an anatomically accurate four-chamber mesh.
+
+    The ventricles always run. The atria run unless ``--no-atria`` is given, and
+    they are what add the P wave; with ``--rhythm`` the single beats are
+    assembled into a continuous multi-beat strip at the requested heart rate.
+    """
+    from ecg12sim import atria as atr
     from ecg12sim import eikonal, mesh as meshmod, mesh_sim, templates
 
     path = args.mesh_file
@@ -137,6 +171,10 @@ def run_mesh_model(args):
         print(f"Locating cohort mesh {args.mesh_case} "
               f"(downloads ~90 MB on first use)...")
         path = meshmod.fetch_mesh(args.mesh_case, dest_dir=args.mesh_dir)
+
+    want_atria = not args.no_atria
+    if args.rhythm and not want_atria:
+        print("Note: --rhythm with --no-atria gives a strip without P waves.")
 
     print(f"Loading {path} ...")
     mesh = meshmod.load_ventricular_mesh(path)
@@ -177,11 +215,57 @@ def run_mesh_model(args):
     print()
     print(beat.summary())
 
+    # ---- atria: the P-wave source, from the same cohort file ----
+    amesh = abeat = aact = None
+    if want_atria:
+        print()
+        print("Loading atrial myocardium (tags 3 and 4) from the same mesh ...")
+        amesh = atr.load_atrial_mesh(path)
+        print(amesh.summary())
+        if atr.fibre_field_is_placeholder(amesh):
+            print("  atrial fibre field is a single repeated direction, i.e. a")
+            print("  placeholder: conduction and conductivity are both treated")
+            print("  as isotropic rather than aligned to fictitious fibres.")
+
+        acv = args.atrial_cv if args.atrial_cv is not None else atr.ATRIAL_CV
+        if args.calibrate_atrial_cv:
+            print()
+            print(f"Calibrating atrial conduction velocity to a "
+                  f"{atr.ATRIAL_ACTIVATION_TARGET_MS:.0f} ms activation ...")
+            acv = atr.calibrate_atrial_cv(amesh)
+            print(f"  calibrated atrial CV {acv:.1f} cm/s")
+
+        print()
+        print("Solving atrial activation ...")
+        aact = atr.solve_atrial_activation(amesh, cv=acv)
+        print()
+        print(atr.format_atrial_activation(amesh, aact))
+
+        print()
+        print("Building atrial template (one depth; see ecg12sim.atria) ...")
+        abank = atr.build_atrial_template_bank(
+            drug=drug, duration=max(600.0, args.duration))
+        abeat = atr.run_atrial_beat(amesh, drug=drug, bank=abank,
+                                   activation=aact)
+        print()
+        print(abeat.summary())
+
     if args.variation:
         print()
         print(tracking.format_band_profile(
             mesh_sim.mesh_band_profile(beat, n_bands=args.variation_bands),
             title="Transmural variation of I_Na and I_Kr (anatomical mesh)"))
+
+    if want_atria:
+        if args.unbounded:
+            # The unbounded medium is a deliberately crippled comparison mode
+            # whose limb leads are ~25x too small; combining the atria into it
+            # would only produce an equally wrong P wave.
+            print()
+            print("Note: --unbounded is a ventricles-only comparison mode; "
+                  "ignoring the atria.")
+        else:
+            return run_with_atria(args, mesh, beat, amesh, abeat, aact)
 
     from ecg12sim import forward
     print()
@@ -248,6 +332,109 @@ def run_mesh_model(args):
     return beat, leads
 
 
+def run_with_atria(args, mesh, beat, amesh, abeat, aact):
+    """Combine atria and ventricles into one recording, then report and plot.
+
+    Handles both lengths from the same code path, because a single cardiac cycle
+    is just a one-beat rhythm: with ``--rhythm`` the strip runs for
+    ``--rhythm-duration`` seconds, and without it for exactly one RR interval.
+    That avoids solving the expensive ventricular forward problem twice.
+    """
+    import numpy as np
+    from ecg12sim import forward, plotting, rhythm, timeline
+
+    if args.rhythm:
+        duration_s = args.rhythm_duration
+        what = f"{duration_s:g} s rhythm strip"
+    else:
+        duration_s = (60.0 / args.heart_rate)
+        what = "one cardiac cycle"
+
+    cfg = rhythm.RhythmConfig(heart_rate_bpm=args.heart_rate,
+                              duration_s=duration_s,
+                              pr_interval_ms=args.pr_interval)
+    print()
+    print(cfg.summary())
+    print()
+    print(f"Building bounded-torso forward model for atria and ventricles "
+          f"({what}) ...")
+    res = rhythm.run_rhythm_bem(beat, abeat, cfg, n_theta=args.torso_theta)
+
+    print()
+    print(res.frame.summary())
+    print()
+    print(res.summary())
+
+    print()
+    print("Lead amplitudes over the recording, mV "
+          "(genuine potential differences, no fitted axes):")
+    for n in forward.LEAD_NAMES:
+        s = res.leads[n]
+        print(f"  {n:<3s} min {s.min():+8.4f}  max {s.max():+8.4f}  "
+              f"p2p {s.max() - s.min():7.4f}")
+    limb = np.mean([np.ptp(res.leads[n]) for n in ("I", "II", "III")])
+    prec = np.mean([np.ptp(res.leads[n]) for n in ("V2", "V3", "V4")])
+    print(f"  limb/precordial peak-to-peak ratio: {limb / prec:.3f} "
+          f"(a real ECG is roughly 0.3-1.0)")
+
+    print()
+    print(rhythm.format_checks(rhythm.check_rhythm(res), "Rhythm checks"))
+    print()
+    print(rhythm.format_checks(rhythm.check_p_wave(res),
+                              "P-wave morphology checks (validate the atria)"))
+    print()
+    print(rhythm.format_beat_table(res))
+
+    # The ventricular morphology checks apply to the ventricular source, which
+    # is exactly what they checked before the atria existed.
+    print()
+    print(forward.format_morphology(forward.check_morphology(
+        res.beat_leads_ventricular, beat.qrs_window, beat.t_window, beat.t)))
+
+    outputs = []
+    if not args.no_save:
+        os.makedirs(args.outdir, exist_ok=True)
+        tag = "rhythm" if args.rhythm else "cycle"
+        jobs = [
+            (f"ecg12_{tag}_{args.heart_rate:.0f}bpm.png",
+             lambda p: plotting.plot_rhythm_12lead(
+                 res,
+                 f"12-lead ECG - four-chamber mesh, bounded torso "
+                 f"({mesh.n_nodes:,} ventricular + {amesh.n_nodes:,} atrial "
+                 f"nodes)",
+                 path=p, rhythm_lead=args.rhythm_lead)),
+            ("ecg_p_wave_detail.png",
+             lambda p: plotting.plot_p_wave_detail(res, path=p)),
+            ("atrial_activation.png",
+             lambda p: plotting.plot_atrial_activation(
+                 amesh, aact, path=p, frame=res.frame)),
+        ]
+        for name, fn in jobs:
+            path = os.path.join(args.outdir, name)
+            fn(path)
+            outputs.append(path)
+
+    lead_name = args.timeline_lead
+    rows = timeline.timeline_from_reduced(
+        beat.t, res.beat_leads_ventricular[lead_name], beat.ina, beat.ikr,
+        beat.qrs_window, beat.t_window, step=args.timeline_step)
+    marks = timeline.find_landmarks(rows)
+    print()
+    print(timeline.format_landmarks(marks,
+                                    signal_label=f"lead {lead_name}"))
+    if not args.no_timeline:
+        print()
+        print(timeline.format_timeline(rows,
+                                       signal_label=f"lead {lead_name}"))
+
+    if outputs:
+        print()
+        print("Saved figures:")
+        for o in outputs:
+            print("  " + o)
+    return res
+
+
 def run_ap_sweep(args):
     """Complete single-cell action potential, then scale I_Na and I_Kr."""
     import numpy as np
@@ -305,6 +492,24 @@ def main(argv=None):
     for v, label in ((args.ina_block, "--ina-block"), (args.ikr_block, "--ikr-block")):
         if not 0.0 <= v <= 100.0:
             raise SystemExit(f"{label} must be between 0 and 100 (got {v}).")
+
+    # Flag combinations that would otherwise be accepted and then quietly
+    # ignored, which is worse than refusing them.
+    if args.rhythm and args.model != "mesh":
+        raise SystemExit(
+            "--rhythm needs the anatomical mesh: add --model mesh.\n"
+            "The 1-D cable has a single electrical axis and no atria, so it "
+            "cannot produce a P wave or independent leads.")
+    if args.rhythm and args.unbounded:
+        raise SystemExit(
+            "--rhythm and --unbounded are incompatible. The unbounded medium "
+            "is a ventricles-only comparison mode whose limb leads come out "
+            "about 25x too small; drop --unbounded for a rhythm strip.")
+    if args.model != "mesh" and (args.no_atria or args.atrial_cv is not None
+                                 or args.calibrate_atrial_cv):
+        raise SystemExit(
+            "the atrial options apply to --model mesh only; the 1-D cable "
+            "models a transmural ventricular strand and has no atria.")
 
     if args.ap_sweep:
         run_ap_sweep(args)

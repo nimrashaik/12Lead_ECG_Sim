@@ -211,11 +211,52 @@ class Conductivity:
     Defaults are the conventional human ventricular values: intracellular
     conduction is roughly an order of magnitude easier along the fibre than
     across it, and the surrounding medium is treated as uniform.
+
+    Setting ``sigma_i_long == sigma_i_trans`` makes the tensor isotropic
+    exactly, because the transversely isotropic form
+    ``sigma_t I + (sigma_l - sigma_t) f (x) f`` collapses to ``sigma I`` and the
+    fibre direction drops out of the arithmetic. That is how
+    :data:`ATRIAL_CONDUCTIVITY` keeps the atria's placeholder fibre field from
+    influencing anything.
     """
 
     sigma_i_long: float = 0.17
     sigma_i_trans: float = 0.019
     sigma_e: float = 0.20
+
+
+#: Isotropic intracellular conductivity for atrial myocardium, S/m.
+#:
+#: The atria **must** be isotropic here, and leaving them anisotropic was an
+#: outright bug. The cohort supplies no atrial fibre field: every atrial fibre
+#: vector points in one identical direction (see :mod:`ecg12sim.atria`). Feeding
+#: that placeholder into the transversely isotropic tensor gives all 397,373
+#: atrial tetrahedra the same high-conductivity axis, so their contributions to
+#: the lead field add coherently along a direction that is an artefact of the
+#: data rather than anatomy. It also contradicted the activation solve, which is
+#: already isotropic for exactly this reason.
+#:
+#: The isotropic value is the **trace-preserving** reduction of the ventricular
+#: tensor, ``(sigma_l + 2 sigma_t) / 3 = 0.0693``, i.e. the isotropic tensor
+#: with the same trace, and equivalently the mean of the ventricular tensor's
+#: three eigenvalues. It keeps the total intracellular conductance the tissue
+#: offers while discarding a directional preference the data cannot support.
+#:
+#: Measured sensitivity of the resulting P wave in lead II, which is why the
+#: choice is stated rather than buried:
+#:
+#:     sigma_i choice                 P peak in II
+#:     anisotropic, placeholder axis     0.535 mV   (artefact, and too large)
+#:     isotropic at sigma_long 0.170     0.438 mV   (too large)
+#:     isotropic, trace average 0.069    0.179 mV   <- normal, used
+#:     isotropic at sigma_trans 0.019    0.049 mV   (too small)
+#:
+#: Normal P amplitude in lead II is at most 0.25 mV and typically 0.1-0.15 mV,
+#: so the trace-preserving value is the one that lands in range, and it does so
+#: on a principled basis rather than by being fitted to that target.
+ATRIAL_CONDUCTIVITY = Conductivity(sigma_i_long=(0.17 + 2 * 0.019) / 3.0,
+                                   sigma_i_trans=(0.17 + 2 * 0.019) / 3.0,
+                                   sigma_e=0.20)
 
 
 @dataclass
@@ -233,7 +274,7 @@ class LeadField:
         L = ["Lead field",
              f"  electrodes : {len(self.names)}",
              f"  nodes      : {w.shape[1]:,}",
-             f"  |w| per electrode (sum of abs):"]
+             "  |w| per electrode (sum of abs):"]
         for i, n in enumerate(self.names):
             L.append(f"    {n:3s} {np.abs(w[i]).sum():.4e}")
         return "\n".join(L)
@@ -329,7 +370,8 @@ def build_lead_field(mesh: VentricularMesh, positions: dict,
 # Electrode potentials and the twelve leads
 # ---------------------------------------------------------------------------
 
-def electrode_potentials(beat, lf: LeadField) -> dict:
+def electrode_potentials(beat, lf: LeadField,
+                         include_rest: bool = True) -> dict:
     """Electrode potentials over the beat, in mV.
 
     Uses the same convolution identity as :mod:`ecg12sim.mesh_sim`: each
@@ -337,28 +379,34 @@ def electrode_potentials(beat, lf: LeadField) -> dict:
     nodal voltage is a template shifted by that node's activation time, so the
     sum collapses to one short convolution per (electrode, template) pair.
 
-    Nodes that have not yet activated still sit at resting potential, and that
-    resting contribution is added back explicitly. Dropping it would leave a
-    spurious drifting baseline, because the lead-field weights do not sum to
-    zero for an electrode.
+    The split between the two terms
+    -------------------------------
+
+    Writing each template as its own resting value plus a deviation,
+    ``T_g(s) = T_g(0) + D_g(s)`` with ``D_g(0) = 0``, the electrode signal
+    separates exactly:
+
+        phi_e(t) = sum_n w[e,n] T_g(n)(0)        <- constant in time
+                   + sum_g (hist[e,g] * D_g)(t)  <- the deflections
+
+    The constant term is every node's resting contribution through the lead
+    field. It cannot be dropped from a single beat, because the lead-field
+    weights do not sum to zero for an electrode, so dropping it would move the
+    whole trace; ``include_rest=False`` is for :mod:`ecg12sim.rhythm`, which
+    superposes many beats and must add that constant exactly once rather than
+    once per beat.
+
+    The deviation is taken against each template's **true pre-stimulus resting
+    potential**, :attr:`ecg12sim.templates.TemplateBank.v_rest`, not against
+    ``Vm[:, 0]``. The first recorded sample already includes one integration
+    step of stimulus current, so it sits 1.04 mV above rest; measuring the
+    deviation from it leaves every template ending 1.04 mV below where it began.
+    That is a small constant error in a single beat and a per-beat baseline step
+    under superposition.
     """
-    from .mesh_sim import nodal_volumes  # noqa: F401  (documents the weighting)
-
     bank = beat.bank
-    mesh = beat.mesh
-    at = beat.activation.activation_time
-    reachable = np.isfinite(at)
-
-    nt = beat.t.size
-    dt = bank.dt
-    at0 = float(at[reachable].min())
-    at_idx = np.zeros(at.size, dtype=np.int64)
-    at_idx[reachable] = np.round((at[reachable] - at0) / dt).astype(np.int64)
-    at_idx = np.clip(at_idx, 0, nt - 1)
-
-    group = bank.index_for(mesh.rho.astype(float))
-    rest = float(bank.Vm[:, 0].mean())
-    tmpl_len = bank.t.size
+    at_idx, reachable, nt = _activation_bins(beat)
+    group = bank.index_for(beat.mesh.rho.astype(float))
 
     out = {}
     for e, name in enumerate(lf.names):
@@ -370,16 +418,57 @@ def electrode_potentials(beat, lf: LeadField) -> dict:
             if not sel.any():
                 continue
             hist = np.bincount(at_idx[sel], weights=w[sel], minlength=nt)[:nt]
-            tmpl = bank.Vm[g] - rest        # deviation from rest
+            tmpl = bank.Vm[g] - _v_rest(bank, g)    # deviation from true rest
             for s in np.flatnonzero(hist):
                 seg = tmpl[:max(nt - s, 0)]
                 if seg.size:
                     signal[s:s + seg.size] += hist[s] * seg
 
-        # Constant resting contribution from every reachable node.
-        signal += rest * w[reachable].sum()
+        if include_rest:
+            signal += _resting_offset(beat, w)
         out[name] = signal
     return out
+
+
+def _v_rest(bank, g: int) -> float:
+    """Template ``g``'s true resting potential, with a fallback for old banks.
+
+    ``v_rest`` was added to the bank once the multi-beat rhythm made the 1.04 mV
+    stimulus offset in ``Vm[:, 0]`` matter; banks built before it fall back to
+    the old behaviour rather than failing.
+    """
+    if getattr(bank, "v_rest", None) is None:
+        return float(bank.Vm[g, 0])
+    return float(bank.v_rest[g])
+
+
+def _activation_bins(beat):
+    """Per-node activation sample index, the reachable mask, and sample count."""
+    bank = beat.bank
+    at = beat.activation.activation_time
+    reachable = np.isfinite(at)
+    nt = beat.t.size
+    at0 = float(at[reachable].min())
+    at_idx = np.zeros(at.size, dtype=np.int64)
+    at_idx[reachable] = np.round((at[reachable] - at0) / bank.dt).astype(np.int64)
+    return np.clip(at_idx, 0, nt - 1), reachable, nt
+
+
+def _resting_offset(beat, weights: np.ndarray) -> float:
+    """Time-constant contribution of every node sitting at its resting potential.
+
+    ``sum_n w[n] * T_g(n)(0)``, evaluated per template group so that a bank with
+    differing resting potentials is handled exactly.
+    """
+    bank = beat.bank
+    _, reachable, _ = _activation_bins(beat)
+    group = bank.index_for(beat.mesh.rho.astype(float))
+    total = 0.0
+    for g in range(bank.n_templates):
+        sel = (group == g) & reachable
+        if sel.any():
+            total += _v_rest(bank, g) * float(weights[sel].sum())
+    return total
 
 
 def derive_12_leads(phi: dict) -> dict:
@@ -518,7 +607,8 @@ def _source_bins(beat):
 
 def surface_potentials_unbounded(beat, surface_points_cm: np.ndarray,
                                  cond: Conductivity | None = None,
-                                 chunk_points: int = 64) -> np.ndarray:
+                                 chunk_points: int = 64,
+                                 include_rest: bool = True) -> np.ndarray:
     """Unbounded-medium potential time series at arbitrary observation points.
 
     Returns ``(n_points, n_time)`` in mV. Observation points are processed in
@@ -538,9 +628,8 @@ def surface_potentials_unbounded(beat, surface_points_cm: np.ndarray,
     bank = beat.bank
     mesh = beat.mesh
     nt = beat.t.size
-    rest = float(bank.Vm[:, 0].mean())
 
-    reach, key, n_bins, _ = _source_bins(beat)
+    reach, key, n_bins, group = _source_bins(beat)
     n_g = bank.n_templates
     n_keys = n_g * n_bins
 
@@ -562,12 +651,25 @@ def surface_potentials_unbounded(beat, surface_points_cm: np.ndarray,
             Wg = W[:, g * n_bins:(g + 1) * n_bins]
             if not Wg.any():
                 continue
-            conv = fftconvolve(Wg, (bank.Vm[g] - rest)[None, :],
+            # Deviation from this template's true resting voltage, so each
+            # template's contribution decays back to zero. See
+            # electrode_potentials for why that matters under superposition.
+            conv = fftconvolve(Wg, (bank.Vm[g] - _v_rest(bank, g))[None, :],
                                mode="full", axes=1)
-            acc += conv[:, :nt]
+            # The full convolution is n_bins + n_template - 1 long, which need
+            # not equal nt: the beat's sample count is derived with a ceiling
+            # and the activation bins with a rounding, so the two can differ by
+            # one sample. Overlay whatever length they have in common rather
+            # than assuming.
+            m = min(conv.shape[1], nt)
+            acc[:, :m] += conv[:, :m]
 
-        # Nodes still at rest contribute a constant through their weights.
-        acc += rest * w[:, reach].sum(axis=1)[:, None]
+        if include_rest:
+            # Every node sitting at its resting potential, through its weight.
+            for g in range(n_g):
+                sel = (group == g) & reach
+                if sel.any():
+                    acc += _v_rest(bank, g) * w[:, sel].sum(axis=1)[:, None]
         out[lo:hi] = acc
     return out
 

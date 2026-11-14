@@ -19,6 +19,35 @@ enough that blocking I_Na or I_Kr produces the expected, well known effects:
 
 Everything is vectorised over an array of cells so the exact same code drives a
 single cell and the 1-D transmural strand used for the pseudo-ECG.
+
+Atrial myocytes
+---------------
+
+The same formulations also drive the **atrial** templates used for the P wave
+(:mod:`ecg12sim.atria`). Two things make a cell atrial here:
+
+``I_Kur``
+    The ultrarapid delayed rectifier, which is the current that distinguishes
+    atrial from ventricular myocardium: it is essentially absent in ventricle
+    and carries much of atrial phase-1/plateau repolarisation. Gating follows
+    the Courtemanche-Ramirez-Nattel human atrial formulation. Its conductance
+    ``Conductances.GKur`` defaults to **0.0**, so every ventricular result in
+    this project is numerically unchanged by its presence; only
+    :data:`ATRIAL_CONDUCTANCES` switches it on.
+``ATRIAL_CONDUCTANCES``
+    A re-scaled conductance set (weaker I_CaL, stronger I_to, weaker I_Ks)
+    calibrated so the isolated atrial myocyte repolarises in ~272 ms.
+
+Honest limit on the atrial action potential, recorded because it is a property
+of this reduced model rather than a tuning choice: because ionic concentrations
+are fixed, resting potential is pinned near ``E_K`` = -86.9 mV, where human
+atrium rests at -75 to -80 mV; and because ``I_CaL`` here is a linear driving
+term with no calcium-dependent inactivation, the atrial plateau keeps a
+ventricular-like dome instead of the triangular decline of a real atrial cell
+(APD50/APD90 comes out ~0.90 against a measured ~0.55). Both affect atrial
+*repolarisation*, i.e. the atrial T wave, which is in any case not visible on a
+clinical ECG because it is buried in the QRS. Neither affects the P wave, which
+is written by the upstroke and by the spatial activation sequence.
 """
 
 from __future__ import annotations
@@ -64,6 +93,28 @@ class Conductances:
     Gb: float = 0.00029    # small background leak toward E_Na
     PNaK: float = 1.362
 
+    #: Ultrarapid delayed rectifier, an **atrial** current. Zero by default, so
+    #: ventricular cells behave exactly as they did before I_Kur existed.
+    #: Scales the Courtemanche voltage-dependent conductance; see
+    #: :data:`ATRIAL_CONDUCTANCES`.
+    GKur: float = 0.0
+
+
+#: Conductances giving an atrial-like action potential, used by
+#: :mod:`ecg12sim.atria` for the P-wave templates.
+#:
+#: Chosen by sweeping (GCaL, Gto, GKs, GKur) and scoring against two targets:
+#: APD90 in the human atrial range of 250-300 ms, and a phase-1 notch that does
+#: not plunge below 0 mV. The selected point gives APD90 = 272 ms with the notch
+#: at +7.7 mV. Relative to the ventricular defaults: I_CaL down 35% (atrial
+#: plateau is lower), I_to up 19% and I_Kur switched on (both give atrial
+#: phase 1 its rapid early repolarisation), I_Ks down 34%.
+ATRIAL_CONDUCTANCES = Conductances(
+    GCaL=0.13, Gto=0.35, GKs=0.26, GKur=0.70)
+
+#: Temperature scaling of the Courtemanche I_Kur gating rates.
+KQ10_KUR = 3.0
+
 
 @dataclass
 class Drug:
@@ -78,8 +129,10 @@ class Drug:
                    ikr_scale=1.0 - ikr_block_pct / 100.0)
 
 
-# Gating-variable layout inside the state matrix (rows = variables, cols = cells)
-GATES = ("m", "h", "j", "d", "f", "r", "s", "xr1", "xr2", "xs")
+# Gating-variable layout inside the state matrix (rows = variables, cols = cells).
+# "ua"/"ui" gate the atrial I_Kur; they are integrated for every cell, but with
+# the default GKur = 0 they have no effect on a ventricular cell's voltage.
+GATES = ("m", "h", "j", "d", "f", "r", "s", "xr1", "xr2", "xs", "ua", "ui")
 IDX = {name: i for i, name in enumerate(GATES)}
 N_STATE = 1 + len(GATES)  # voltage + gates
 
@@ -113,6 +166,8 @@ def initial_state(n_cells: int) -> np.ndarray:
     s[1 + IDX["xr1"], :] = 0.0
     s[1 + IDX["xr2"], :] = 1.0
     s[1 + IDX["xs"], :] = 0.0
+    s[1 + IDX["ua"], :] = 0.0    # I_Kur activation, closed at rest
+    s[1 + IDX["ui"], :] = 1.0    # I_Kur inactivation, available at rest
     return s
 
 
@@ -182,6 +237,19 @@ def _gate_inf_tau(V: np.ndarray):
     b_xs = 1.0 / (1.0 + np.exp((V - 35.0) / 15.0))
     tau["xs"] = a_xs * b_xs + 80.0
 
+    # --- atrial I_Kur activation ua / inactivation ui ---
+    # Courtemanche, Ramirez & Nattel (1998), human atrial myocyte. Only reaches
+    # the membrane equation when Conductances.GKur is non-zero.
+    a_ua = 0.65 / (np.exp(-(V + 10.0) / 8.5) + np.exp(-(V - 30.0) / 59.0))
+    b_ua = 0.65 / (2.5 + np.exp((V + 82.0) / 17.0))
+    inf["ua"] = 1.0 / (1.0 + np.exp(-(V + 30.3) / 9.6))
+    tau["ua"] = 1.0 / (KQ10_KUR * (a_ua + b_ua))
+
+    a_ui = 1.0 / (21.0 + np.exp(-(V - 185.0) / 28.0))
+    b_ui = np.exp((V - 158.0) / 16.0)
+    inf["ui"] = 1.0 / (1.0 + np.exp((V - 99.45) / 27.48))
+    tau["ui"] = 1.0 / (KQ10_KUR * (a_ui + b_ui))
+
     return inf, tau
 
 
@@ -202,6 +270,12 @@ def compute_currents(state: np.ndarray, cond: Conductances, drug: Drug,
     I_Kr = cond.GKr * drug.ikr_scale * np.sqrt(KO / 5.4) * g["xr1"] * g["xr2"] * (V - E_K)
     I_Ks = cond.GKs * gks_scale * g["xs"] ** 2 * (V - E_KS)
 
+    # Atrial ultrarapid delayed rectifier. The Courtemanche conductance is itself
+    # voltage-dependent; cond.GKur scales it and is 0 for ventricular cells, so
+    # this term vanishes identically there.
+    g_kur = 0.005 + 0.05 / (1.0 + np.exp(-(V - 15.0) / 13.0))
+    I_Kur = cond.GKur * g_kur * g["ua"] ** 3 * g["ui"] * (V - E_K)
+
     a_k1 = 0.1 / (1.0 + np.exp(0.06 * (V - E_K - 200.0)))
     b_k1 = ((3.0 * np.exp(0.0002 * (V - E_K + 100.0)) + np.exp(0.1 * (V - E_K - 10.0)))
             / (1.0 + np.exp(-0.5 * (V - E_K))))
@@ -215,7 +289,8 @@ def compute_currents(state: np.ndarray, cond: Conductances, drug: Drug,
 
     return {
         "I_Na": I_Na, "I_CaL": I_CaL, "I_to": I_to, "I_Kr": I_Kr,
-        "I_Ks": I_Ks, "I_K1": I_K1, "I_pK": I_pK, "I_NaK": I_NaK, "I_bNa": I_bNa,
+        "I_Ks": I_Ks, "I_K1": I_K1, "I_pK": I_pK, "I_NaK": I_NaK,
+        "I_bNa": I_bNa, "I_Kur": I_Kur,
     }
 
 

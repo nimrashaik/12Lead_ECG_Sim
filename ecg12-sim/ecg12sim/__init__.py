@@ -1,8 +1,19 @@
-"""ecg12sim - a compact human-ventricular 12-lead ECG simulator.
+"""ecg12sim - a compact human four-chamber 12-lead ECG simulator.
 
-Generates a 12-lead ECG from a transmural ionic-model strand and shows how
+Generates a 12-lead ECG from an ionic model of human myocardium and shows how
 scaling the fast sodium current (I_Na) and the rapid delayed-rectifier
 potassium current (I_Kr) changes the action potential and the ECG.
+
+Three models, in increasing order of anatomical fidelity:
+
+* a 1-D transmural strand, where conduction and repolarisation emerge from
+  diffusive coupling and a run takes seconds (:mod:`ecg12sim.cable`);
+* a biventricular reaction-eikonal model on an image-derived mesh, giving
+  twelve genuinely independent leads through a bounded-torso forward solution
+  (:mod:`ecg12sim.mesh`, :mod:`ecg12sim.eikonal`, :mod:`ecg12sim.forward`);
+* the same mesh plus atrial myocardium, which adds the P wave, assembled into a
+  multi-beat rhythm strip at a prescribed heart rate (:mod:`ecg12sim.atria`,
+  :mod:`ecg12sim.rhythm`).
 """
 
 from .ionic_model import Conductances, Drug
@@ -46,6 +57,17 @@ from .torso import (
     Surface, make_torso, make_sphere, bem_matrix, solve_surface,
     validate_sphere, format_sphere_check,
 )
+from .atria import (
+    AtrialMesh, AtrialBeat, ATRIAL_CV, ATRIAL_TAGS, load_atrial_mesh,
+    extract_atria, sinoatrial_node, solve_atrial_activation,
+    calibrate_atrial_cv, build_atrial_template_bank, run_atrial_beat,
+    fibre_field_is_placeholder, format_atrial_activation,
+)
+from .rhythm import (
+    RhythmConfig, RhythmResult, BeatMeasurement, run_rhythm_bem, superpose,
+    detect_qrs, measure_beats, p_wave_axis_deg, check_p_wave, check_rhythm,
+    format_checks, format_beat_table,
+)
 
 __all__ = [
     "Conductances", "Drug", "CableConfig", "simulate_cable",
@@ -73,6 +95,14 @@ __all__ = [
     "check_morphology", "format_morphology",
     "Surface", "make_torso", "make_sphere", "bem_matrix", "solve_surface",
     "validate_sphere", "format_sphere_check",
+    "AtrialMesh", "AtrialBeat", "ATRIAL_CV", "ATRIAL_TAGS",
+    "load_atrial_mesh", "extract_atria", "sinoatrial_node",
+    "solve_atrial_activation", "calibrate_atrial_cv",
+    "build_atrial_template_bank", "run_atrial_beat",
+    "fibre_field_is_placeholder", "format_atrial_activation",
+    "RhythmConfig", "RhythmResult", "BeatMeasurement", "run_rhythm_bem",
+    "superpose", "detect_qrs", "measure_beats", "p_wave_axis_deg",
+    "check_p_wave", "check_rhythm", "format_checks", "format_beat_table",
 ]
 
 __version__ = "0.1.0"

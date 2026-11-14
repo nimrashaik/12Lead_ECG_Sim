@@ -1142,3 +1142,258 @@ def plot_ap_sweeps(ina_res, ikr_res, path: str | None = None):
         fig.savefig(path, dpi=140, facecolor="white")
         plt.close(fig)
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Rhythm strip: a multi-beat 12-lead recording with P waves
+# ---------------------------------------------------------------------------
+
+def _rhythm_background(ax, t0, t1, ymin, ymax):
+    """ECG-paper grid on a seconds axis: major 0.2 s / 0.5 mV, minor 0.04 s."""
+    ax.set_xticks(np.arange(np.floor(t0 / 0.2) * 0.2, t1 + 1e-9, 0.2))
+    ax.set_xticks(np.arange(np.floor(t0 / 0.04) * 0.04, t1 + 1e-9, 0.04),
+                  minor=True)
+    ax.set_yticks(np.arange(np.floor(ymin * 2) / 2, ymax + 1e-9, 0.5))
+    ax.set_yticks(np.arange(np.floor(ymin * 10) / 10, ymax + 1e-9, 0.1),
+                  minor=True)
+    ax.grid(which="major", color="#f4a8a8", lw=0.6)
+    ax.grid(which="minor", color="#fbdede", lw=0.3)
+    ax.set_axisbelow(True)
+    ax.tick_params(labelsize=7)
+
+
+def plot_rhythm_12lead(result, title: str, path: str | None = None,
+                       rhythm_lead: str = "II", columns: int = 4):
+    """The standard clinical 10-second 12-lead layout.
+
+    This is the format a real machine prints, and it is deliberately not the
+    single-beat 3x4 grid used elsewhere in this project. Each of the twelve
+    leads is shown for its own 2.5-second quarter of the recording, in four
+    columns of three, and a continuous full-length rhythm strip of one lead runs
+    across the bottom. The rhythm strip is what makes rate and regularity
+    readable; the quartered leads are what make morphology readable in all
+    twelve views without a ten-second-wide figure.
+
+    Amplitudes are shared across every panel so the leads stay comparable, which
+    is also the convention on a printed ECG.
+    """
+    t_s = result.t / 1000.0
+    total = float(t_s[-1])
+    seg = total / columns
+    rows = 12 // columns
+    order = [[_GRID[r][c] for c in range(4)] for r in range(3)]
+    # Re-flow the canonical I/II/III, aVR/aVL/aVF, V1-V3, V4-V6 order into the
+    # requested number of columns.
+    flat = [order[r][c] for c in range(4) for r in range(3)]
+    grid = [[flat[c * rows + r] for c in range(columns)] for r in range(rows)]
+
+    vmax = max(float(np.max(np.abs(s))) for s in result.leads.values())
+    ymax, ymin = vmax * 1.18, -vmax * 1.18
+
+    fig, axes = plt.subplots(rows + 1, columns,
+                             figsize=(16.5, 2.05 * (rows + 1)),
+                             gridspec_kw={"height_ratios":
+                                          [1.0] * rows + [1.15]})
+    for r in range(rows):
+        for c in range(columns):
+            name = grid[r][c]
+            ax = axes[r, c]
+            lo, hi = c * seg, (c + 1) * seg
+            m = (t_s >= lo) & (t_s <= hi)
+            _rhythm_background(ax, lo, hi, ymin, ymax)
+            ax.plot(t_s[m], result.leads[name][m], color="#111", lw=1.0)
+            ax.set_xlim(lo, hi)
+            ax.set_ylim(ymin, ymax)
+            ax.text(0.015, 0.84, name, transform=ax.transAxes,
+                    fontsize=11, fontweight="bold")
+            if c == 0:
+                ax.set_ylabel("mV", fontsize=9)
+            else:
+                ax.tick_params(labelleft=False)
+
+    # Full-length rhythm strip across the bottom row.
+    gs = axes[rows, 0].get_gridspec()
+    for ax in axes[rows, :]:
+        ax.remove()
+    axr = fig.add_subplot(gs[rows, :])
+    _rhythm_background(axr, 0.0, total, ymin, ymax)
+    axr.plot(t_s, result.leads[rhythm_lead], color="#111", lw=0.9)
+    axr.set_xlim(0, total)
+    axr.set_ylim(ymin, ymax)
+    axr.text(0.004, 0.84, f"{rhythm_lead}  (rhythm, full {total:.0f} s)",
+             transform=axr.transAxes, fontsize=10.5, fontweight="bold")
+    axr.set_xlabel("time (s)", fontsize=10)
+    axr.set_ylabel("mV", fontsize=9)
+
+    cfg = result.config
+    fig.suptitle(f"{title}\n{cfg.heart_rate_bpm:.0f} bpm, "
+                 f"{cfg.n_beats} beats in {cfg.duration_s:.0f} s "
+                 f"(RR {cfg.rr_ms:.0f} ms), "
+                 f"AV delay {cfg.pr_interval_ms:.0f} ms",
+                 fontsize=13.5, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.945))
+    if path:
+        fig.savefig(path, dpi=140, facecolor="white")
+        plt.close(fig)
+    return fig
+
+
+def plot_p_wave_detail(result, path: str | None = None,
+                       leads_to_show=("II", "V1", "aVR"),
+                       n_beats: int = 2):
+    """Zoom on the P-QRS-T sequence, separating the atrial and ventricular parts.
+
+    This is the figure that demonstrates the P wave is genuinely atrial in
+    origin rather than an artefact of the assembly. The total trace is drawn
+    over the two components that sum to it, so the atrial contribution can be
+    seen writing the P wave and then disappearing under the QRS as the atrial T
+    wave, which is where a real atrial T wave also hides.
+    """
+    cfg = result.config
+    t_s = result.t / 1000.0
+    # Clamp to what the recording actually contains: in single-cycle mode the
+    # strip is only one RR long, and asking for two beats would leave half the
+    # axis empty.
+    span = min(n_beats * cfg.rr_ms / 1000.0, float(t_s[-1]))
+    m = t_s <= span
+
+    beats = None
+    try:
+        from .rhythm import measure_beats
+        beats = [b for b in measure_beats(result.t, result.leads)
+                 if b.r_time <= span * 1000.0]
+    except Exception:
+        beats = []
+
+    fig, axes = plt.subplots(len(leads_to_show), 1,
+                             figsize=(13, 3.0 * len(leads_to_show)),
+                             sharex=True)
+    if len(leads_to_show) == 1:
+        axes = [axes]
+
+    for ax, name in zip(axes, leads_to_show):
+        tot = result.leads[name][m]
+        atr = result.leads_atrial[name][m]
+        ven = result.leads_ventricular[name][m]
+        lim = max(float(np.max(np.abs(tot))), 1e-3)
+        _rhythm_background(ax, 0.0, span, -1.25 * lim, 1.25 * lim)
+
+        # The total is drawn first and wide, the two components thin on top.
+        # Drawing the total last hides the atrial curve underneath it over
+        # exactly the interval the figure exists to show, since before the QRS
+        # the total *is* the atrial contribution.
+        ax.plot(t_s[m], tot, color="#999999", lw=4.0, solid_capstyle="round",
+                label="recorded lead = atrial + ventricular", zorder=2)
+        ax.plot(t_s[m], ven, color="#2ca02c", lw=1.2, ls="--",
+                label="ventricular source alone (QRS and T)", zorder=3)
+        ax.plot(t_s[m], atr, color="#1f77b4", lw=1.5,
+                label="atrial source alone (P wave, then atrial T)", zorder=4)
+        ax.set_ylim(-1.25 * lim, 1.25 * lim)
+        ax.set_xlim(0, span)
+        ax.set_ylabel(f"{name}  (mV)", fontsize=11, fontweight="bold")
+
+        for b in beats:
+            if np.isfinite(b.p_onset):
+                ax.axvspan(b.p_onset / 1000.0, b.p_offset / 1000.0,
+                           color="#1f77b4", alpha=0.13, zorder=0)
+            ax.axvline(b.qrs_onset / 1000.0, color="#2ca02c", lw=1.0, ls=":")
+
+        if ax is axes[0]:
+            ax.legend(loc="upper right", fontsize=8.5, ncol=1, framealpha=0.95)
+
+    axes[-1].set_xlabel("time (s)", fontsize=11)
+
+    pm = ""
+    if beats and np.isfinite(beats[0].p_duration):
+        b = beats[0]
+        pm = (f"   measured: P duration {b.p_duration:.0f} ms, "
+              f"P amplitude {b.p_amplitude:+.3f} mV in II, "
+              f"PR {b.pr_interval:.0f} ms")
+    fig.suptitle("P wave, QRS and T wave, with the atrial and ventricular "
+                 "sources that produce them" + ("\n" + pm if pm else ""),
+                 fontsize=13, fontweight="bold")
+    caption = (
+        "Shaded bands mark the measured P wave; dotted green lines mark the "
+        "measured QRS onset. The atrial and ventricular meshes are solved "
+        "separately because they share nodes at the valve annuli, and the "
+        "ventricular beat is offset by the prescribed atrioventricular delay. "
+        "Summing them is exact, not an approximation: the forward problem is "
+        "linear in the source."
+    )
+    fig.text(0.5, 0.012, caption, ha="center", fontsize=9, style="italic",
+             color="#444", wrap=True)
+    fig.tight_layout(rect=(0, 0.045, 1, 0.945))
+    if path:
+        fig.savefig(path, dpi=140, facecolor="white")
+        plt.close(fig)
+    return fig
+
+
+def plot_atrial_activation(amesh, act, path: str | None = None, frame=None):
+    """Atrial activation time projected onto the three anatomical planes.
+
+    Shows the wavefront leaving the sinoatrial node at the superior vena cava
+    junction and spreading over both atria, which is what sets P-wave duration
+    and axis. Scatter rather than a surface render, because the project's only
+    plotting dependency is matplotlib.
+
+    Pass ``frame`` (an :class:`ecg12sim.forward.AnatomicalFrame`) to plot in body
+    coordinates, so that "left", "anterior" and "superior" on the axes mean what
+    they say. Without it the raw mesh axes are plotted and labelled as such,
+    since the cohort's mesh axes are not aligned to body anatomy.
+    """
+    from .atria import CHAMBER_LA
+
+    at = act.activation_time
+    p = amesh.points.astype(float)
+    if frame is not None:
+        from .forward import HEART_OFFSET_BODY
+        p = (frame.rotation @ (p - frame.origin).T).T + HEART_OFFSET_BODY
+    ok = np.isfinite(at)
+    # Thin the cloud so the figure stays legible and small.
+    step = max(int(p.shape[0] / 26000), 1)
+    sel = np.flatnonzero(ok)[::step]
+    san = int(act.stimulus_nodes[0])
+
+    if frame is not None:
+        planes = [(0, 2, "toward the left (cm)", "toward the head (cm)",
+                   "frontal view"),
+                  (1, 2, "toward the front (cm)", "toward the head (cm)",
+                   "sagittal view"),
+                  (0, 1, "toward the left (cm)", "toward the front (cm)",
+                   "transverse view")]
+    else:
+        planes = [(0, 2, "mesh x (cm)", "mesh z (cm)", "mesh x-z plane"),
+                  (1, 2, "mesh y (cm)", "mesh z (cm)", "mesh y-z plane"),
+                  (0, 1, "mesh x (cm)", "mesh y (cm)", "mesh x-y plane")]
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5.6))
+    for ax, (i, j, xl, yl, ttl) in zip(axes, planes):
+        s = ax.scatter(p[sel, i], p[sel, j], c=at[sel], s=1.6,
+                       cmap="turbo", vmin=0.0, vmax=float(at[ok].max()))
+        ax.scatter([p[san, i]], [p[san, j]], s=150, marker="*",
+                   facecolor="white", edgecolor="black", linewidth=1.3,
+                   zorder=5, label="sinoatrial node")
+        ax.set_xlabel(xl, fontsize=9.5)
+        ax.set_ylabel(yl, fontsize=9.5)
+        ax.set_title(ttl, fontsize=11, fontweight="bold", pad=6)
+        ax.set_aspect("equal")
+        ax.grid(color="#e8e8e8", lw=0.5)
+        ax.set_axisbelow(True)
+        if ax is axes[0]:
+            ax.legend(loc="upper right", fontsize=9)
+    fig.colorbar(s, ax=axes, label="activation time (ms)", pad=0.015,
+                 fraction=0.02)
+
+    n_la = int((amesh.chamber == CHAMBER_LA).sum())
+    fig.suptitle(
+        f"Atrial activation from the sinoatrial node  —  "
+        f"{amesh.n_nodes:,} nodes ({n_la:,} left-atrial), total "
+        f"{act.total_activation_time:.0f} ms, which sets the P-wave duration\n"
+        f"isotropic conduction at {act.velocities.along_fibre:.0f} cm/s: the "
+        f"cohort supplies no atrial fibre field, so no anisotropy is imposed",
+        fontsize=12.5, fontweight="bold", y=1.02)
+    if path:
+        fig.savefig(path, dpi=135, facecolor="white", bbox_inches="tight")
+        plt.close(fig)
+    return fig

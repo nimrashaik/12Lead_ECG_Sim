@@ -191,6 +191,18 @@ class TemplateBank:
     apd90: np.ndarray         # (n_templates,) ms
     repol_time: np.ndarray    # (n_templates,) ms after activation, -40 mV crossing
     dt: float                 # ms, template sample spacing
+    #: True pre-stimulus resting potential per template, mV.
+    #:
+    #: Not the same thing as ``Vm[:, 0]``, and the difference matters. The first
+    #: recorded sample is taken one integration step *after* the stimulus
+    #: begins, so it already sits ``dt * stimulus`` above rest: 0.02 ms at
+    #: 52 pA/pF is 1.04 mV. Reading ``Vm[:, 0]`` as "rest" therefore overstates
+    #: the resting potential by that much, which leaves every template ending
+    #: 1.04 mV *below* where it started. For a single beat that is a small
+    #: constant error in the forward model's resting term; under the multi-beat
+    #: superposition in :mod:`ecg12sim.rhythm` it would be a 1.04 mV step per
+    #: beat and would drift the baseline right off the trace.
+    v_rest: np.ndarray = None  # (n_templates,) mV
 
     @property
     def n_templates(self) -> int:
@@ -266,6 +278,10 @@ def _run_ensemble(rho: np.ndarray, drug: im.Drug, cond: im.Conductances,
         s, _ = im.step(s, dt, zero_pre, cond, drug,
                        gto_scale=gto, gks_scale=gks)
 
+    # The resting potential, captured before the stimulus is applied. See
+    # TemplateBank.v_rest for why the first recorded sample will not equal it.
+    v_rest = s[0].copy()
+
     V = np.zeros((n, n_cells))
     ina = np.zeros((n, n_cells))
     ikr = np.zeros((n, n_cells))
@@ -282,7 +298,7 @@ def _run_ensemble(rho: np.ndarray, drug: im.Drug, cond: im.Conductances,
         ina[k] = cur["I_Na"]
         ikr[k] = cur["I_Kr"]
 
-    return V, ina, ikr
+    return V, ina, ikr, v_rest
 
 
 def _apd90_and_repol(V: np.ndarray, dt: float) -> tuple[float, float]:
@@ -328,8 +344,8 @@ def build_template_bank(drug: im.Drug | None = None,
     n_out = n_full // stride
     usable = n_out * stride
 
-    V, ina, ikr = _run_ensemble(rho, drug, cond, duration, dt, het,
-                                prepace=prepace)
+    V, ina, ikr, v_rest = _run_ensemble(rho, drug, cond, duration, dt, het,
+                                        prepace=prepace)
 
     apd = np.zeros(n_templates)
     rep = np.zeros(n_templates)
@@ -349,7 +365,8 @@ def build_template_bank(drug: im.Drug | None = None,
                         Vm=np.ascontiguousarray(Vm),
                         I_Na=np.ascontiguousarray(I_Na),
                         I_Kr=np.ascontiguousarray(I_Kr),
-                        apd90=apd, repol_time=rep, dt=stride * dt)
+                        apd90=apd, repol_time=rep, dt=stride * dt,
+                        v_rest=v_rest)
 
 
 #: Coupled transmural repolarisation dispersion measured from the 1-D cable,
